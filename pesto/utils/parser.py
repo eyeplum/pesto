@@ -21,5 +21,5 @@ def parse_args():
                         help='number of chunks to split the input data into (default: 1). '
                              'Can be increased to prevent out-of-memory errors.')
     parser.add_argument('--gpu', type=int, default=-1,
-                        help='the index of the GPU to use, -1 for CPU')
+                        help='the index of the GPU to use, -1 for CPU. On macOS, any positive value will use MPS if available.')
     return parser.parse_args()

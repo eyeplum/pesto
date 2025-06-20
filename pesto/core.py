@@ -23,10 +23,13 @@ def _predict(x: torch.Tensor,
             preds.append(pred)
             confidence.append(conf)
             activations.append(act)
-    except torch.cuda.OutOfMemoryError:
-        raise torch.cuda.OutOfMemoryError("Got an out-of-memory error while performing pitch estimation. "
-                                          "Please increase the number of chunks with option `-c`/`--chunks` "
-                                          "to reduce GPU memory usage.")
+    except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+        if "out of memory" in str(e).lower():
+            raise RuntimeError("Got an out-of-memory error while performing pitch estimation. "
+                             "Please increase the number of chunks with option `-c`/`--chunks` "
+                             "to reduce GPU memory usage.")
+        else:
+            raise
 
     preds = torch.cat(preds, dim=0)
     confidence = torch.cat(confidence, dim=0)
@@ -111,10 +114,18 @@ def predict_from_files(
     if isinstance(audio_files, str):
         audio_files = [audio_files]
 
-    if gpu >= 0 and not torch.cuda.is_available():
-        warnings.warn("You're trying to use the GPU but no GPU has been found. Using CPU instead...")
-        gpu = -1
-    device = torch.device(f"cuda:{gpu:d}" if gpu >= 0 else "cpu")
+    if gpu >= 0:
+        if torch.cuda.is_available():
+            device = torch.device(f"cuda:{gpu:d}")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+            if gpu > 0:
+                warnings.warn("Multiple MPS devices are not supported. Using default MPS device.")
+        else:
+            warnings.warn("You're trying to use the GPU but no GPU (CUDA/MPS) has been found. Using CPU instead...")
+            device = torch.device("cpu")
+    else:
+        device = torch.device("cpu")
 
     # define model
     model = load_model(model_name, step_size=step_size).to(device)

@@ -25,10 +25,26 @@ def test_cli(file, fmt, convert_to_freq):
     os.unlink(out_file)
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU not available")
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 @pytest.mark.parametrize("file, fmt, convert_to_freq",
                          itertools.product(glob.glob(AUDIOS_DIR + "/*.wav"), ["csv", "npz", "png"], [True, False]))
-def test_cli_gpu(file, fmt, convert_to_freq):
+def test_cli_cuda(file, fmt, convert_to_freq):
+    if convert_to_freq:
+        suffix = ".f0." + fmt
+        option = ""
+    else:
+        suffix = ".semitones." + fmt
+        option = " -F"
+    os.system(f"pesto {file} --gpu 0 --export_format " + fmt + option)
+    out_file = file.rsplit('.', 1)[0] + suffix
+    assert os.path.isfile(out_file)
+    os.unlink(out_file)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
+@pytest.mark.parametrize("file, fmt, convert_to_freq",
+                         itertools.product(glob.glob(AUDIOS_DIR + "/*.wav"), ["csv", "npz", "png"], [True, False]))
+def test_cli_mps(file, fmt, convert_to_freq):
     if convert_to_freq:
         suffix = ".f0." + fmt
         option = ""
