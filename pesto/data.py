@@ -12,7 +12,9 @@ class ToLogMagnitude(nn.Module):
         self.eps = torch.finfo(torch.float32).eps
 
     def forward(self, x):
-        x = x.abs()
+        # Assume input is real/imaginary pairs with last dimension = 2
+        # Compute complex magnitude: sqrt(real^2 + imag^2)  
+        x = torch.sqrt(x.pow(2).sum(-1))
         x.clamp_(min=self.eps).log10_().mul_(20)
         return x
 
@@ -62,7 +64,9 @@ class Preprocessor(nn.Module):
         """
         # compute CQT from input waveform, and invert dims for (time_steps, num_harmonics, freq_bins)
         # in other words, time becomes the batch dimension, enabling efficient processing for long audios.
-        complex_cqt = torch.view_as_complex(self.hcqt(x, sr=sr)).permute(0, 3, 1, 2)
+        # Get HCQT output as real/imaginary pairs and rearrange dimensions
+        hcqt_output = self.hcqt(x, sr=sr)  # Shape: (batch, harmonics, freqs, timesteps, 2)
+        complex_cqt = hcqt_output.permute(0, 3, 1, 2, 4)  # Shape: (batch, timesteps, harmonics, freqs, 2)
 
         # convert to dB
         return self.to_log(complex_cqt)

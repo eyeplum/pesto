@@ -12,3 +12,5 @@ pesto/old_weights
 **/*.png
 **/*.pdf
 **/*.pt
+**/*.onnx
+
