@@ -1,5 +1,5 @@
 import argparse
-import datetime
+import os
 import time
 import platform
 
@@ -12,6 +12,7 @@ from pesto import load_model
 def export_model(checkpoint_name, sampling_rate, chunk_size, onnx_name):
     """Exports a model to ONNX format and saves it to a file."""
     step_size = 1000 * chunk_size / sampling_rate
+    batch_size = 1
 
     print("Chunk size:", chunk_size)
 
@@ -24,23 +25,33 @@ def export_model(checkpoint_name, sampling_rate, chunk_size, onnx_name):
     )
     model.eval()  # Set the model to evaluation mode
 
+    # Create output directory
+    output_dir = "onnx-export"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Add directory to filename if not already included
+    if not os.path.dirname(onnx_name):
+        onnx_path = os.path.join(output_dir, onnx_name)
+    else:
+        onnx_path = onnx_name
+
     # Example input for export
-    example_input = torch.randn(3, chunk_size).clip(-1, 1)
+    example_input = torch.randn(batch_size, chunk_size).clip(-1, 1)
 
     # Export the model to ONNX
     torch.onnx.export(
         model,
         example_input,
-        onnx_name,
+        onnx_path,
         export_params=True,
         opset_version=20,
         do_constant_folding=True,
         input_names=['input'],
         output_names=['pred', 'conf', 'vol', 'act'],
     )
-    print(f"Model successfully exported as '{onnx_name}'")
+    print(f"Model successfully exported as '{onnx_path}'")
 
-    return model, onnx_name
+    return model, onnx_path
 
 
 def create_ort_session(onnx_name, execution_provider='CPUExecutionProvider'):
@@ -74,10 +85,12 @@ def create_ort_session(onnx_name, execution_provider='CPUExecutionProvider'):
 
 def validate_model(original_model, onnx_name, chunk_size, execution_provider='CPUExecutionProvider'):
     """Loads the exported ONNX model and validates its output."""
+    batch_size = 1
+    
     # Load ONNX model
     ort_session = create_ort_session(onnx_name, execution_provider)
     
-    example_input = torch.randn(3, chunk_size).clip(-1, 1)
+    example_input = torch.randn(batch_size, chunk_size).clip(-1, 1)
 
     # Run the original PyTorch model
     with torch.no_grad():
@@ -102,10 +115,12 @@ def validate_model(original_model, onnx_name, chunk_size, execution_provider='CP
 
 def validate_performance(original_model, onnx_name, chunk_size, sampling_rate=48000, num_iterations=1000, execution_provider='CPUExecutionProvider'):
     """Validates and compares the performance between PyTorch and ONNX models."""
+    batch_size = 1
+    
     # Load ONNX model
     ort_session = create_ort_session(onnx_name, execution_provider)
     
-    example_input = torch.randn(3, chunk_size).clip(-1, 1)
+    example_input = torch.randn(batch_size, chunk_size).clip(-1, 1)
     
     # Benchmark PyTorch model
     torch_times = []
@@ -189,15 +204,14 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--onnx_name", type=str, default=None, help="Optional custom ONNX filename.")
     parser.add_argument("-e", "--execution_provider", type=str,
                         choices=['CPUExecutionProvider', 'CoreMLExecutionProvider'],
-                        default='CoreMLExecutionProvider',
+                        default='CPUExecutionProvider',
                         help="ONNX Runtime execution provider to use.")
 
     args = parser.parse_args()
 
     # Construct default ONNX name if not provided
     if args.onnx_name is None:
-        date_str = datetime.datetime.now().strftime("%y%m%d")
-        args.onnx_name = f"{date_str}_sr{args.sampling_rate//1000}k_h{args.chunk_size}.onnx"
+        args.onnx_name = f"sr{args.sampling_rate//1000}k_h{args.chunk_size}.onnx"
 
     model, onnx_name = export_model(args.checkpoint_name, args.sampling_rate, args.chunk_size, args.onnx_name)
     validate_model(model, onnx_name, args.chunk_size, args.execution_provider)
