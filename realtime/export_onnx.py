@@ -211,7 +211,7 @@ if __name__ == "__main__":
 
     # Construct default ONNX name if not provided
     if args.onnx_name is None:
-        args.onnx_name = f"sr{args.sampling_rate//1000}k_h{args.chunk_size}.onnx"
+        args.onnx_name = f"pesto_rt_sr{args.sampling_rate//1000}k_h{args.chunk_size}.onnx"
 
     model, onnx_name = export_model(args.checkpoint_name, args.sampling_rate, args.chunk_size, args.onnx_name)
     validate_model(model, onnx_name, args.chunk_size, args.execution_provider)
