@@ -31,6 +31,7 @@ dependencies = [
     "onnx>=1.17.0",
     "onnxruntime>=1.20.1",
     "onnxscript>=0.2.7",
+    "executorch>=0.2.1",
 ]
 
 [project.optional-dependencies]
