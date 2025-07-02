@@ -28,6 +28,136 @@ def create_executorch_runtime(pte_model_path):
         raise ImportError("ExecuTorch runtime not available. Install executorch runtime.")
 
 
+def run_torch_inference(waveform, checkpoint_name, sampling_rate, chunk_size):
+    """
+    Run PyTorch model inference on audio waveform (realtime callback simulation).
+    
+    Args:
+        waveform: Audio tensor
+        checkpoint_name: Checkpoint name to load
+        sampling_rate: Sampling rate for processing
+        chunk_size: Chunk size for processing (non-overlapping chunks)
+        
+    Returns:
+        tuple: (pitch_predictions, confidence_predictions, volume_predictions)
+    """
+    # No overlap - simulate realtime audio callback
+    num_chunks = (len(waveform) + chunk_size - 1) // chunk_size  # Ceiling division
+    
+    print("Running Torch model inference...")
+    step_size = 1000 * chunk_size / sampling_rate
+    torch_model = load_model(
+        checkpoint_name, 
+        step_size=step_size, 
+        sampling_rate=sampling_rate,
+        streaming=True,
+        max_batch_size=1
+    )
+    torch_model.eval()
+    
+    # Process Torch model in chunks
+    pitch_predictions = []
+    confidence_predictions = []
+    volume_predictions = []
+    
+    with torch.no_grad():
+        for i in range(num_chunks):
+            start_idx = i * chunk_size
+            end_idx = start_idx + chunk_size
+            
+            # Extract chunk with padding if necessary (realtime callback style)
+            if end_idx > len(waveform):
+                chunk = torch.zeros(chunk_size)
+                available_samples = len(waveform) - start_idx
+                if available_samples > 0:
+                    chunk[:available_samples] = waveform[start_idx:]
+            else:
+                chunk = waveform[start_idx:end_idx]
+            
+            # Prepare input for Torch model (add batch dimension)
+            chunk_input = chunk.unsqueeze(0)
+            
+            # Run Torch inference
+            pred, conf, vol, act = torch_model(chunk_input)
+            
+            # Extract outputs (remove batch dimension)
+            pitch_predictions.append(pred[0].item())
+            confidence_predictions.append(conf[0].item())
+            volume_predictions.append(vol[0].item() if vol.numel() > 0 else 0.0)
+    
+    print(f"Torch model generated {len(pitch_predictions)} predictions")
+    return np.array(pitch_predictions), np.array(confidence_predictions), np.array(volume_predictions)
+
+
+def run_executorch_inference(waveform, method, sampling_rate, chunk_size):
+    """
+    Run ExecuTorch model inference on audio waveform (realtime callback simulation).
+    
+    Args:
+        waveform: Audio tensor
+        method: ExecuTorch method object
+        sampling_rate: Sampling rate for processing
+        chunk_size: Chunk size for processing (non-overlapping chunks)
+        
+    Returns:
+        tuple: (pitch_predictions, confidence_predictions, volume_predictions, time_stamps)
+    """
+    # No overlap - simulate realtime audio callback
+    num_chunks = (len(waveform) + chunk_size - 1) // chunk_size  # Ceiling division
+    
+    print("Running ExecuTorch model inference...")
+    
+    pitch_predictions = []
+    confidence_predictions = []
+    volume_predictions = []
+    time_stamps = []
+    
+    for i in range(num_chunks):
+        start_idx = i * chunk_size
+        end_idx = start_idx + chunk_size
+        
+        # Extract chunk with padding if necessary (realtime callback style)
+        if end_idx > len(waveform):
+            chunk = torch.zeros(chunk_size)
+            available_samples = len(waveform) - start_idx
+            if available_samples > 0:
+                chunk[:available_samples] = waveform[start_idx:]
+        else:
+            chunk = waveform[start_idx:end_idx]
+        
+        # Prepare input for ExecuTorch model (add batch dimension)
+        chunk_input = chunk.unsqueeze(0)
+        
+        try:
+            # Run ExecuTorch inference
+            outputs = method.execute([chunk_input])
+            
+            # Extract outputs: [pred, conf, vol, act]
+            pred = outputs[0][0].item()  # Remove batch dimension and convert to scalar
+            conf = outputs[1][0].item()
+            vol = outputs[2][0].item() if len(outputs) > 2 else 0.0
+            
+            pitch_predictions.append(pred)
+            confidence_predictions.append(conf)
+            volume_predictions.append(vol)
+            
+            # Calculate time stamp for this chunk start (realtime callback timing)
+            time_stamp = start_idx / sampling_rate
+            time_stamps.append(time_stamp)
+            
+        except Exception as e:
+            print(f"Error during inference at chunk {i}: {e}")
+            break
+    
+    if not pitch_predictions:
+        print("No ExecuTorch predictions generated")
+        return None, None, None, None
+    
+    print(f"ExecuTorch model generated {len(pitch_predictions)} predictions")
+    return (np.array(pitch_predictions), np.array(confidence_predictions), 
+            np.array(volume_predictions), np.array(time_stamps))
+
+
 def plot_pitch_contour_comparison(audio_path, pte_model_path=None, checkpoint_name="mir-1k_g7", 
                                  output_path=None, sampling_rate=48000, chunk_size=960):
     """
@@ -79,114 +209,22 @@ def plot_pitch_contour_comparison(audio_path, pte_model_path=None, checkpoint_na
         resampler = torchaudio.transforms.Resample(original_sr, sampling_rate)
         waveform = resampler(waveform)
     
-    # Process audio in chunks with overlap
-    hop_size = chunk_size // 2  # 50% overlap
-    num_chunks = max(1, (len(waveform) - chunk_size) // hop_size + 1)
+    # Run inference with both models (realtime callback simulation)
+    num_chunks = (len(waveform) + chunk_size - 1) // chunk_size  # Ceiling division
+    print(f"Processing {num_chunks} non-overlapping chunks of size {chunk_size} (realtime callback simulation)")
     
-    print(f"Processing {num_chunks} chunks of size {chunk_size}")
-    
-    # ExecuTorch predictions
-    pitch_predictions_pte = []
-    confidence_predictions_pte = []
-    volume_predictions_pte = []
-    time_stamps = []
-    
-    # Torch predictions - process in streaming chunks (same as ExecuTorch)
-    print("Running Torch model inference...")
-    step_size = 1000 * chunk_size / sampling_rate
-    torch_model = load_model(
-        checkpoint_name, 
-        step_size=step_size, 
-        sampling_rate=sampling_rate,
-        streaming=True,
-        max_batch_size=1
+    # Run PyTorch inference
+    torch_pitch_predictions, torch_confidence_predictions, torch_volume_predictions = run_torch_inference(
+        waveform, checkpoint_name, sampling_rate, chunk_size
     )
-    torch_model.eval()
     
-    # Process Torch model in same chunks as ExecuTorch
-    pitch_predictions_torch = []
-    confidence_predictions_torch = []
-    volume_predictions_torch = []
+    # Run ExecuTorch inference
+    pitch_predictions_pte, confidence_predictions_pte, volume_predictions_pte, time_stamps = run_executorch_inference(
+        waveform, method, sampling_rate, chunk_size
+    )
     
-    with torch.no_grad():
-        for i in range(num_chunks):
-            start_idx = i * hop_size
-            end_idx = start_idx + chunk_size
-            
-            # Extract chunk with padding if necessary (same as ExecuTorch)
-            if end_idx > len(waveform):
-                chunk = torch.zeros(chunk_size)
-                available_samples = len(waveform) - start_idx
-                if available_samples > 0:
-                    chunk[:available_samples] = waveform[start_idx:]
-            else:
-                chunk = waveform[start_idx:end_idx]
-            
-            # Prepare input for Torch model (add batch dimension)
-            chunk_input = chunk.unsqueeze(0)
-            
-            # Run Torch inference
-            pred, conf, vol, act = torch_model(chunk_input)
-            
-            # Extract outputs (remove batch dimension)
-            pitch_predictions_torch.append(pred[0].item())
-            confidence_predictions_torch.append(conf[0].item())
-            volume_predictions_torch.append(vol[0].item() if vol.numel() > 0 else 0.0)
-    
-    # Convert to numpy arrays
-    torch_pitch_predictions = np.array(pitch_predictions_torch)
-    torch_confidence_predictions = np.array(confidence_predictions_torch)
-    torch_time_stamps = np.array(time_stamps)  # Use same timestamps as ExecuTorch
-    
-    print(f"Torch model generated {len(torch_pitch_predictions)} predictions")
-    print("Running ExecuTorch model inference...")
-    
-    for i in range(num_chunks):
-        start_idx = i * hop_size
-        end_idx = start_idx + chunk_size
-        
-        # Extract chunk with padding if necessary
-        if end_idx > len(waveform):
-            chunk = torch.zeros(chunk_size)
-            available_samples = len(waveform) - start_idx
-            if available_samples > 0:
-                chunk[:available_samples] = waveform[start_idx:]
-        else:
-            chunk = waveform[start_idx:end_idx]
-        
-        # Prepare input for ExecuTorch model (add batch dimension)
-        chunk_input = chunk.unsqueeze(0)
-        
-        try:
-            # Run ExecuTorch inference
-            outputs = method.execute([chunk_input])
-            
-            # Extract outputs: [pred, conf, vol, act]
-            pred = outputs[0][0].item()  # Remove batch dimension and convert to scalar
-            conf = outputs[1][0].item()
-            vol = outputs[2][0].item() if len(outputs) > 2 else 0.0
-            
-            pitch_predictions_pte.append(pred)
-            confidence_predictions_pte.append(conf)
-            volume_predictions_pte.append(vol)
-            
-            # Calculate time stamp for this chunk center
-            time_stamp = (start_idx + chunk_size // 2) / sampling_rate
-            time_stamps.append(time_stamp)
-            
-        except Exception as e:
-            print(f"Error during inference at chunk {i}: {e}")
-            break
-    
-    if not pitch_predictions_pte:
-        print("No ExecuTorch predictions generated")
+    if pitch_predictions_pte is None:
         return None, None, None
-    
-    # Convert ExecuTorch predictions to numpy arrays
-    pitch_predictions_pte = np.array(pitch_predictions_pte)
-    confidence_predictions_pte = np.array(confidence_predictions_pte)
-    volume_predictions_pte = np.array(volume_predictions_pte)
-    time_stamps = np.array(time_stamps)
     
     print(f"ExecuTorch model generated {len(pitch_predictions_pte)} predictions")
     print(f"ExecuTorch Pitch range: {pitch_predictions_pte.min():.1f} - {pitch_predictions_pte.max():.1f} MIDI")
@@ -234,7 +272,7 @@ def plot_pitch_contour_comparison(audio_path, pte_model_path=None, checkpoint_na
         plt.show()
     
     return (pitch_predictions_pte, confidence_predictions_pte, time_stamps, 
-            torch_pitch_predictions, torch_confidence_predictions, torch_time_stamps)
+            torch_pitch_predictions, torch_confidence_predictions, time_stamps)
 
 
 def main():
