@@ -28,7 +28,7 @@ def create_executorch_runtime(pte_model_path):
         raise ImportError("ExecuTorch runtime not available. Install executorch runtime.")
 
 
-def run_torch_inference(waveform, checkpoint_name, sampling_rate, chunk_size):
+def run_torch_inference(waveform, checkpoint_name, sampling_rate, chunk_size, confidence_threshold=0.3):
     """
     Run PyTorch model inference on audio waveform (realtime callback simulation).
     
@@ -37,6 +37,7 @@ def run_torch_inference(waveform, checkpoint_name, sampling_rate, chunk_size):
         checkpoint_name: Checkpoint name to load
         sampling_rate: Sampling rate for processing
         chunk_size: Chunk size for processing (non-overlapping chunks)
+        confidence_threshold: Confidence threshold below which pitch is set to 0
         
     Returns:
         tuple: (pitch_predictions, confidence_predictions, volume_predictions)
@@ -81,15 +82,23 @@ def run_torch_inference(waveform, checkpoint_name, sampling_rate, chunk_size):
             pred, conf, vol, act = torch_model(chunk_input)
             
             # Extract outputs (remove batch dimension)
-            pitch_predictions.append(pred[0].item())
-            confidence_predictions.append(conf[0].item())
-            volume_predictions.append(vol[0].item() if vol.numel() > 0 else 0.0)
+            pitch_val = pred[0].item()
+            conf_val = conf[0].item()
+            vol_val = vol[0].item() if vol.numel() > 0 else 0.0
+            
+            # Apply confidence threshold post-processing
+            if conf_val < confidence_threshold:
+                pitch_val = 0.0
+            
+            pitch_predictions.append(pitch_val)
+            confidence_predictions.append(conf_val)
+            volume_predictions.append(vol_val)
     
     print(f"Torch model generated {len(pitch_predictions)} predictions")
     return np.array(pitch_predictions), np.array(confidence_predictions), np.array(volume_predictions)
 
 
-def run_executorch_inference(waveform, method, sampling_rate, chunk_size):
+def run_executorch_inference(waveform, method, sampling_rate, chunk_size, confidence_threshold=0.3):
     """
     Run ExecuTorch model inference on audio waveform (realtime callback simulation).
     
@@ -98,6 +107,7 @@ def run_executorch_inference(waveform, method, sampling_rate, chunk_size):
         method: ExecuTorch method object
         sampling_rate: Sampling rate for processing
         chunk_size: Chunk size for processing (non-overlapping chunks)
+        confidence_threshold: Confidence threshold below which pitch is set to 0
         
     Returns:
         tuple: (pitch_predictions, confidence_predictions, volume_predictions, time_stamps)
@@ -137,6 +147,10 @@ def run_executorch_inference(waveform, method, sampling_rate, chunk_size):
             conf = outputs[1][0].item()
             vol = outputs[2][0].item() if len(outputs) > 2 else 0.0
             
+            # Apply confidence threshold post-processing
+            if conf < confidence_threshold:
+                pred = 0.0
+            
             pitch_predictions.append(pred)
             confidence_predictions.append(conf)
             volume_predictions.append(vol)
@@ -159,7 +173,7 @@ def run_executorch_inference(waveform, method, sampling_rate, chunk_size):
 
 
 def plot_pitch_contour_comparison(audio_path, pte_model_path=None, checkpoint_name="mir-1k_g7", 
-                                 output_path=None, sampling_rate=48000, chunk_size=960):
+                                 output_path=None, sampling_rate=48000, chunk_size=960, confidence_threshold=0.3):
     """
     Plot pitch contour and confidence comparing ExecuTorch and Torch model inference.
     
@@ -170,6 +184,7 @@ def plot_pitch_contour_comparison(audio_path, pte_model_path=None, checkpoint_na
         output_path: Path to save plot (if None, displays plot)
         sampling_rate: Target sampling rate for processing
         chunk_size: Chunk size for processing
+        confidence_threshold: Confidence threshold below which pitch is set to 0
     """
     print(f"Loading audio: {audio_path}")
     
@@ -215,12 +230,12 @@ def plot_pitch_contour_comparison(audio_path, pte_model_path=None, checkpoint_na
     
     # Run PyTorch inference
     torch_pitch_predictions, torch_confidence_predictions, torch_volume_predictions = run_torch_inference(
-        waveform, checkpoint_name, sampling_rate, chunk_size
+        waveform, checkpoint_name, sampling_rate, chunk_size, confidence_threshold
     )
     
     # Run ExecuTorch inference
     pitch_predictions_pte, confidence_predictions_pte, volume_predictions_pte, time_stamps = run_executorch_inference(
-        waveform, method, sampling_rate, chunk_size
+        waveform, method, sampling_rate, chunk_size, confidence_threshold
     )
     
     if pitch_predictions_pte is None:
@@ -318,6 +333,13 @@ def main():
         help="Chunk size for processing (default: 960)"
     )
     
+    parser.add_argument(
+        "-t", "--confidence_threshold", 
+        type=float, 
+        default=0.3,
+        help="Confidence threshold below which pitch is set to 0 (default: 0.3)"
+    )
+    
     args = parser.parse_args()
     
     # Validate input file
@@ -339,7 +361,8 @@ def main():
             checkpoint_name=args.checkpoint,
             output_path=args.output,
             sampling_rate=args.sampling_rate,
-            chunk_size=args.chunk_size
+            chunk_size=args.chunk_size,
+            confidence_threshold=args.confidence_threshold
         )
         
         if results[0] is not None:
