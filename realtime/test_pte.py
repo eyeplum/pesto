@@ -6,6 +6,7 @@ Test script to plot pitch contour and confidence using ExecuTorch (.pte) model f
 import argparse
 import os
 import tempfile
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
@@ -60,6 +61,7 @@ def run_torch_inference(waveform, checkpoint_name, sampling_rate, chunk_size, co
     pitch_predictions = []
     confidence_predictions = []
     volume_predictions = []
+    total_inference_time = 0.0
     
     with torch.no_grad():
         for i in range(num_chunks):
@@ -78,8 +80,11 @@ def run_torch_inference(waveform, checkpoint_name, sampling_rate, chunk_size, co
             # Prepare input for Torch model (add batch dimension)
             chunk_input = chunk.unsqueeze(0)
             
-            # Run Torch inference
+            # Run Torch inference with timing
+            start_time = time.time()
             pred, conf, vol, act = torch_model(chunk_input)
+            inference_time = time.time() - start_time
+            total_inference_time += inference_time
             
             # Extract outputs (remove batch dimension)
             pitch_val = pred[0].item()
@@ -94,7 +99,10 @@ def run_torch_inference(waveform, checkpoint_name, sampling_rate, chunk_size, co
             confidence_predictions.append(conf_val)
             volume_predictions.append(vol_val)
     
+    avg_inference_time = total_inference_time / len(pitch_predictions) if pitch_predictions else 0
     print(f"Torch model generated {len(pitch_predictions)} predictions")
+    print(f"Torch total inference time: {total_inference_time:.4f}s")
+    print(f"Torch average inference time per chunk: {avg_inference_time*1000:.2f}ms")
     return np.array(pitch_predictions), np.array(confidence_predictions), np.array(volume_predictions)
 
 
@@ -121,6 +129,7 @@ def run_executorch_inference(waveform, method, sampling_rate, chunk_size, confid
     confidence_predictions = []
     volume_predictions = []
     time_stamps = []
+    total_inference_time = 0.0
     
     for i in range(num_chunks):
         start_idx = i * chunk_size
@@ -139,8 +148,11 @@ def run_executorch_inference(waveform, method, sampling_rate, chunk_size, confid
         chunk_input = chunk.unsqueeze(0)
         
         try:
-            # Run ExecuTorch inference
+            # Run ExecuTorch inference with timing
+            start_time = time.time()
             outputs = method.execute([chunk_input])
+            inference_time = time.time() - start_time
+            total_inference_time += inference_time
             
             # Extract outputs: [pred, conf, vol, act]
             pred = outputs[0][0].item()  # Remove batch dimension and convert to scalar
@@ -167,7 +179,10 @@ def run_executorch_inference(waveform, method, sampling_rate, chunk_size, confid
         print("No ExecuTorch predictions generated")
         return None, None, None, None
     
+    avg_inference_time = total_inference_time / len(pitch_predictions) if pitch_predictions else 0
     print(f"ExecuTorch model generated {len(pitch_predictions)} predictions")
+    print(f"ExecuTorch total inference time: {total_inference_time:.4f}s")
+    print(f"ExecuTorch average inference time per chunk: {avg_inference_time*1000:.2f}ms")
     return (np.array(pitch_predictions), np.array(confidence_predictions), 
             np.array(volume_predictions), np.array(time_stamps))
 
